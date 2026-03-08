@@ -1,18 +1,48 @@
 import { NestFactory } from '@nestjs/core';
-import { Logger } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { ConfigService } from '@nestjs/config';
 import { createServer } from 'node:net';
 import { AppModule } from './app.module';
+import { APP_CONSTANTS } from './common/constants/app.constants';
 
 const logger = new Logger('Bootstrap');
-const DEFAULT_PORT = 8000;
-const MAX_PORT_ATTEMPTS = 10;
 
-async function bootstrap() {
-  const preferredPort = getPreferredPort();
+async function bootstrap(): Promise<void> {
+  const app = await NestFactory.create(AppModule);
+  const configService = app.get(ConfigService);
+
+  const preferredPort = getPreferredPort(configService);
   logger.log(`Starting application with preferred port ${preferredPort}`);
 
-  const app = await NestFactory.create(AppModule);
-  const port = await findAvailablePort(preferredPort);
+  app.enableCors({
+    origin:
+      configService.get<string>('FRONTEND_URL') ??
+      APP_CONSTANTS.DEFAULT_FRONTEND_URL,
+    methods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true,
+  });
+
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
+
+  const config = new DocumentBuilder()
+    .setTitle(APP_CONSTANTS.SWAGGER_TITLE)
+    .setDescription(APP_CONSTANTS.SWAGGER_DESCRIPTION)
+    .setVersion(APP_CONSTANTS.SWAGGER_VERSION)
+    .addBearerAuth()
+    .build();
+
+  const document = SwaggerModule.createDocument(app, config);
+  SwaggerModule.setup(APP_CONSTANTS.SWAGGER_PATH, app, document);
+
+  const port = await findAvailablePort(preferredPort, configService);
 
   if (port !== preferredPort) {
     logger.warn(
@@ -24,27 +54,25 @@ async function bootstrap() {
   logger.log(`Application is running on ${await app.getUrl()}`);
 }
 
-function getPreferredPort(): number {
-  const portValue = process.env.PORT;
+function getPreferredPort(configService: ConfigService): number {
+  const portValue = configService.get<string>('PORT');
 
   if (portValue === undefined) {
-    return DEFAULT_PORT;
+    return APP_CONSTANTS.DEFAULT_PORT;
   }
 
   const parsedPort = Number.parseInt(portValue, 10);
 
-  if (Number.isInteger(parsedPort) && parsedPort > 0) {
-    return parsedPort;
-  }
-
-  logger.warn(
-    `Invalid PORT value "${portValue}". Falling back to ${DEFAULT_PORT}`,
-  );
-  return DEFAULT_PORT;
+  return Number.isInteger(parsedPort) && parsedPort > 0
+    ? parsedPort
+    : APP_CONSTANTS.DEFAULT_PORT;
 }
 
-async function findAvailablePort(startPort: number): Promise<number> {
-  const hasExplicitPort = process.env.PORT !== undefined;
+async function findAvailablePort(
+  startPort: number,
+  configService: ConfigService,
+): Promise<number> {
+  const hasExplicitPort = configService.get<string>('PORT') !== undefined;
   const firstPortIsAvailable = await isPortAvailable(startPort);
 
   if (firstPortIsAvailable) {
@@ -57,16 +85,19 @@ async function findAvailablePort(startPort: number): Promise<number> {
     );
   }
 
-  for (let attempt = 1; attempt < MAX_PORT_ATTEMPTS; attempt += 1) {
+  for (
+    let attempt = 1;
+    attempt < APP_CONSTANTS.MAX_PORT_ATTEMPTS;
+    attempt += 1
+  ) {
     const port = startPort + attempt;
-
     if (await isPortAvailable(port)) {
       return port;
     }
   }
 
   throw new Error(
-    `Unable to find an available port between ${startPort} and ${startPort + MAX_PORT_ATTEMPTS - 1}.`,
+    `Unable to find an available port between ${startPort} and ${startPort + APP_CONSTANTS.MAX_PORT_ATTEMPTS - 1}.`,
   );
 }
 
@@ -78,7 +109,6 @@ function isPortAvailable(port: number): Promise<boolean> {
           resolve(false);
           return;
         }
-
         reject(error);
       })
       .once('listening', () => {
@@ -95,7 +125,6 @@ bootstrap().catch((error: unknown) => {
     process.exit(1);
     return;
   }
-
   logger.error('Application failed to start with an unknown error');
   process.exit(1);
 });
