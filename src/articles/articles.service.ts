@@ -2,7 +2,16 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateArticleDto } from './dto/create-article.dto';
 import { UpdateArticleDto } from './dto/update-article.dto';
-import { Article, Category, Prisma } from '@prisma/client';
+import { Article, Category, Prisma, Role } from '@prisma/client';
+import { APP_CONSTANTS } from '../common/constants/app.constants';
+
+export interface PaginatedArticles {
+  data: Article[];
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+}
 
 @Injectable()
 export class ArticlesService {
@@ -47,28 +56,53 @@ export class ArticlesService {
   }
 
   async findAll(
-    sortBy?: 'date' | 'views' | 'likes',
+    sortBy: 'date' | 'views' | 'likes' = 'date',
     category?: Category,
-  ): Promise<Article[]> {
-    this.logger.log(`Fetching all articles`);
+    page: number = APP_CONSTANTS.DEFAULT_PAGE,
+    limit: number = APP_CONSTANTS.DEFAULT_LIMIT,
+    role?: Role,
+  ): Promise<PaginatedArticles> {
+    this.logger.log(
+      `Fetching all articles page=${page} limit=${limit} role=${role}`,
+    );
 
-    let orderBy: Prisma.ArticleOrderByWithRelationInput = {
-      publishedAt: 'desc',
+    const safeLimit = Math.min(Math.max(1, limit), APP_CONSTANTS.MAX_LIMIT);
+    const safePage = Math.max(1, page);
+    const skip = (safePage - 1) * safeLimit;
+
+    const sortMap: Record<string, Prisma.ArticleOrderByWithRelationInput> = {
+      views: { views: 'desc' },
+      likes: { likes: 'desc' },
+      date: { publishedAt: 'desc' },
     };
-    if (sortBy === 'views') {
-      orderBy = { views: 'desc' };
-    } else if (sortBy === 'likes') {
-      orderBy = { likes: 'desc' };
-    } else if (sortBy === 'date') {
-      orderBy = { publishedAt: 'desc' };
+    const orderBy = sortMap[sortBy] || { publishedAt: 'desc' };
+
+    const where: Prisma.ArticleWhereInput = {};
+    if (category) {
+      where.category = category;
     }
 
-    const where: Prisma.ArticleWhereInput = category ? { category } : {};
+    if (role === Role.READER) {
+      where.published = true;
+    }
 
-    return this.prisma.article.findMany({
-      where,
-      orderBy,
-    });
+    const [total, data] = await this.prisma.$transaction([
+      this.prisma.article.count({ where }),
+      this.prisma.article.findMany({
+        where,
+        orderBy,
+        skip,
+        take: safeLimit,
+      }),
+    ]);
+
+    return {
+      data,
+      total,
+      page: safePage,
+      limit: safeLimit,
+      totalPages: Math.ceil(total / safeLimit),
+    };
   }
 
   async findOne(id: string): Promise<Article> {
@@ -141,6 +175,24 @@ export class ArticlesService {
 
     return this.prisma.article.delete({
       where: { id },
+    });
+  }
+
+  async like(id: string): Promise<Article> {
+    this.logger.log(`Liking article: ${id}`);
+
+    const article: Article | null = await this.prisma.article.findUnique({
+      where: { id },
+    });
+
+    if (!article) {
+      this.logger.warn(`Liking failed, article not found: ${id}`);
+      throw new NotFoundException('Article not found');
+    }
+
+    return this.prisma.article.update({
+      where: { id },
+      data: { likes: { increment: 1 } },
     });
   }
 }
