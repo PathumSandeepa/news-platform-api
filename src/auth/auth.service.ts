@@ -2,14 +2,7 @@ import { Injectable, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
-
-interface AuthResponse {
-  token: string;
-  id: string;
-  email: string;
-  username: string;
-  role: string;
-}
+import { AuthResponseDto } from './dto/auth-response.dto';
 
 @Injectable()
 export class AuthService {
@@ -24,7 +17,7 @@ export class AuthService {
     username?: string,
     email?: string,
     password?: string,
-  ): Promise<AuthResponse> {
+  ): Promise<AuthResponseDto> {
     if (!username || !email || !password) {
       throw new HttpException(
         'Missing required fields',
@@ -74,7 +67,7 @@ export class AuthService {
   async login(
     emailOrUsername?: string,
     password?: string,
-  ): Promise<AuthResponse> {
+  ): Promise<AuthResponseDto> {
     if (!emailOrUsername || !password) {
       throw new HttpException(
         'Missing required fields',
