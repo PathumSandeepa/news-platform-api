@@ -41,7 +41,11 @@ export async function seedUsers(prisma: PrismaClient): Promise<SeededUser[]> {
 
     const user = await prisma.user.upsert({
       where: { email: userData.email },
-      update: {},
+      update: {
+        username: userData.username,
+        password: hashedPassword,
+        role: userData.role,
+      },
       create: {
         username: userData.username,
         email: userData.email,
